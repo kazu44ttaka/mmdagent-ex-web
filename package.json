@@ -1,0 +1,12 @@
+{
+  "name": "mmdagent-ex-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Run MMDAgent-EX content in a web browser and drive it from a Plugin_Remote WebSocket server.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "serve": "python -m http.server 8000"
+  }
+}

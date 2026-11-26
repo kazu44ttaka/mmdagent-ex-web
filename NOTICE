@@ -1,0 +1,21 @@
+MMDAgent-EX Web
+Copyright 2026 Kazushi Kato
+
+This product is licensed under the Apache License, Version 2.0 (LICENSE).
+
+It contains JavaScript translations of, and code modified from, MMDAgent-EX
+(https://github.com/mmdagent-ex/MMDAgent-EX):
+  Copyright 2022-2023 Nagoya Institute of Technology
+  Licensed under the Apache License, Version 2.0.
+Parts of MMDAgent-EX derive from MMDAgent, and the files ported from those
+parts also carry:
+  Copyright (c) 2009-2016 Nagoya Institute of Technology, Department of
+  Computer Science (MMDAgent Project Team)
+  under the BSD 3-Clause license in LICENSES/MMDAgent-BSD-3-Clause.txt.
+Each ported source file names the MMDAgent-EX files it was ported from.
+
+appdata/lip.txt, appdata/default.shapemap and appdata/julius/ are copied
+unchanged from MMDAgent-EX's Release/AppData.
+
+Bundled third-party software (three.js, mmd-parser, Ammo.js / Bullet,
+Julius, libfvad, zlib) is listed with its license in THIRD_PARTY_NOTICES.md.
