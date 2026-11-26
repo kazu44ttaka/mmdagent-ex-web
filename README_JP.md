@@ -58,8 +58,8 @@ Chrome か Edge で <http://localhost:8000> を開き、次の順に操作しま
 
 | 分類 | 対応しているもの |
 |---|---|
-| コンテンツ | `.mdf` の設定（カメラ・照明・トゥーン描画・輪郭線の太さ・投影の影 / 影マップ・物理演算・舞台の大きさ・`max_num_model`・`lipsync_priority`・`show_fps`）、同じ名前の FST とサブ FST、`%INCLUDE`、変数、`$a==b` の判定、`@正規表現@` の入力 |
-| モデル | `MODEL_ADD`（複数モデル、位置・回転、トゥーンのオン/オフ、ほかのモデルのボーンへの取り付け）、`MODEL_CHANGE`・`MODEL_CHANGE_ASYNC`・`MODEL_DELETE`（フェードアウト、取り付けたモデルも）、`<モデル>.shapemap` またはシステムの `default.shapemap`、`<モデル>.lip`、`<モデル>.csv`（材質の不透明度）、`<モデル>.loadmessage` / `.deletemessage`、PMD のボーンの種類（IK・回転影響下・回転連動） |
+| コンテンツ | `.mdf` の設定（カメラ・照明・トゥーン描画・輪郭線の太さと `light_edge`・投影の影 / 影マップ・物理演算・舞台の大きさ・`max_num_model`・`lipsync_priority`・`show_fps`）、同じ名前の FST とサブ FST、`%INCLUDE`、変数、`$a==b` の判定、`@正規表現@` の入力 |
+| モデル | `MODEL_ADD`（複数モデル、位置・回転、トゥーンのオン/オフ、ほかのモデルのボーンへの取り付け）、`MODEL_CHANGE`・`MODEL_CHANGE_ASYNC`・`MODEL_DELETE`（フェードアウト、取り付けたモデルも）、`<モデル>.shapemap` またはシステムの `default.shapemap`、`<モデル>.lip`、`<モデル>.csv`（材質の輪郭線・不透明度・両面描画と影の設定・テクスチャ、頂点ごとの輪郭線の太さ）、`<モデル>.loadmessage` / `.deletemessage`、PMD のボーンの種類（IK・回転影響下・回転連動） |
 | モーション | `MOTION_ADD`（優先度、`FULL` / `PART`、`ONCE` / `LOOP`、開始・ループ・終了のなめらかなつなぎ、位置合わせ）、`MOTION_CHANGE`・`MOTION_RESET`・`MOTION_ACCELERATE`・`MOTION_CONFIGURE`（置き換え・加算・乗算、ブレンド率）・`MOTION_DELETE`、VMD の IK・表示の切り替え、`LIPSYNC_START` / `LIPSYNC_STOP`（lip.txt） |
 | 位置 | `MOVE_START` / `MOVE_STOP`・`TURN_START` / `TURN_STOP`・`ROTATE_START` / `ROTATE_STOP`（ローカル / グローバル、速さ） |
 | 舞台 | `STAGE`（床と背景の画像、または 3D の舞台モデル）、`CAMERA`（視点、時間をかけた移動、ボーンへの追従、カメラモーション）、`LIGHTCOLOR`・`LIGHTDIRECTION` |
@@ -81,8 +81,9 @@ Chrome か Edge で <http://localhost:8000> を開き、次の順に操作しま
 - **音声合成と音声認識**：Open_JTalk・Flite と Julius の代わりに、ブラウザーの声と認識を使います。ブラウザーは音素の
   時刻を返さないので、`SYNTH_START` の口は一定の調子で動き、Julius 固有のイベント（`RECOG_EVENT_MODIFY`・`_GMM`・`_AWAY`・
   `_OVERFLOW`・`_RAPID`）は出ません。
-- **描画**：three.js で描くので、見た目は近いものの画素単位では同じになりません。PMX のボーン・材質・UV モーフ、PMX の
-  階層ごとのボーン更新とローカル付与、`doppel_shadow`、ぼかしの後処理、`light_edge`、`cartoon_edge_selected_color` は
+- **描画**：MMDAgent-EX の固定機能の照明・トゥーン・スフィアマップ・輪郭線と同じ計算をするシェーダーで three.js が
+  描くので、色は同じになります。アンチエイリアスと影マップの範囲はわずかに違います。PMX のボーン・材質・UV モーフ、
+  PMX の階層ごとのボーン更新とローカル付与、`doppel_shadow`、ぼかしの後処理、`cartoon_edge_selected_color` は
   反映しません。画面の部品は MMDAgent-EX の配色の HTML で、`BUTTON_ADD` の座標はおおよそです。
 - **ブラウザーではできないもの**：`TRANSPARENT_*`、`REMOTEKEY_DOWN` / `UP`、`RECOG_RECORD_*`、`LOG_UPLOAD`、
   `AVATAR_LOGSAVE_*`、動くテクスチャ（`TEXTURE_SETANIMATIONRATE`）、内蔵の HTTP サーバー、AnyScript・Network・Kafka・
@@ -107,8 +108,9 @@ npm test   # node --test（Node.js 20 以降）。入れるパッケージはあ
 | `src/bindings.js`・`src/lipsync-motion.js` | KeyValue と結び付け、LIPSYNC のモーション |
 | `src/plugins.js`・`src/speech.js`・`src/ui.js`・`src/system.js` | プラグイン、Web Speech、画面の部品、そのほかの命令 |
 | `src/viewer.js` | three.js の描画、舞台、影、共有の物理演算 |
+| `src/look.js`、`src/material-looks.js` | MMDAgent-EX のモデルの見た目：材質の設定、照明、トゥーン、輪郭線 |
 
-three.js r160 と Ammo.js は `vendor/` に、MMDAgent-EX の `lip.txt`・`default.shapemap`・Julius の音素モデルは `appdata/` に
+three.js r160 と Ammo.js は `vendor/` に、MMDAgent-EX の `lip.txt`・`default.shapemap`・トゥーンのテクスチャ・Julius の音素モデルは `appdata/` に
 同梱しているので、オフラインでも動きます。Julius を作り直すときは [emsdk](https://emscripten.org/) を入れて
 `julius/build.sh <MMDAgent-EX のソースのフォルダー>` を実行します。
 

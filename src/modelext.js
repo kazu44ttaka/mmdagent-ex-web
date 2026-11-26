@@ -13,7 +13,7 @@
 
 /**
  * Extra model files MMDAgent-EX reads next to a .pmd / .pmx:
- *   <model>.csv          material opacities (PMDModel::parseExtCsv, "Material" rows)
+ *   <model>.csv          material and vertex-edge settings (PMDModel::parseExtCsv)
  *   <model>.shapemap     lip / expression / action settings (shapemap.js)
  *   <model>.loadmessage  messages issued after the model is loaded
  */
@@ -46,47 +46,106 @@ export function splitCsvRow(line) {
 }
 
 /**
- * Material opacities from a model CSV. Only the Material section is decoded
- * (Gene's CSV is 12 MB, mostly vertices).
- * @param {Uint8Array} bytes
- * @returns {Array<{ name: string, opacity: number }>}
+ * @typedef {{
+ *   name: string, alpha: number, face: boolean, shadow: boolean,
+ *   shadowMapDrop: boolean, shadowMapRender: boolean,
+ *   edge: boolean, edgeWidth: number, edgeColor: number[],
+ *   tex: string | null, sphere: string | null, sphereMode: number,
+ * }} CsvMaterial
  */
-export function parseMaterialCsv(bytes) {
-  const find = (needle, from) => {
-    const n = new TextEncoder().encode(needle);
-    for (let i = bytes.indexOf(n[0], from); i >= 0 && i <= bytes.length - n.length; i = bytes.indexOf(n[0], i + 1)) {
-      let j = 1;
-      while (j < n.length && bytes[i + j] === n[j]) j += 1;
-      if (j === n.length) return i;
-    }
-    return -1;
+
+/**
+ * The parts of a model CSV (PMXEditor / PMDEditor export) that MMDAgent-EX
+ * applies to the look (PMDModel::parseExtCsv): Material rows and the edge rate
+ * of Vertex rows. Lines are scanned as bytes; only Material and header lines are
+ * decoded (Gene's CSV is 12 MB, mostly vertices).
+ * @param {Uint8Array} bytes
+ * @returns {{ materials: CsvMaterial[], vertexEdge: Array<[number, number]> }}
+ */
+export function parseModelCsv(bytes) {
+  const startsWith = (pos, prefix) => {
+    for (let i = 0; i < prefix.length; i += 1) if (bytes[pos + i] !== prefix.charCodeAt(i)) return false;
+    return true;
   };
-  let start = find('\nMaterial,', 0);
-  if (start >= 0) start += 1;
-  else if (find('Material,', 0) === 0) start = 0;
-  else {
-    const pmx = find('\nPmxMaterial,', 0);
-    start = pmx >= 0 ? pmx + 1 : -1;
+  let utf8 = null;
+  const decode = (from, to) => {
+    const chunk = bytes.subarray(from, to);
+    if (utf8 !== false) {
+      try {
+        const s = new TextDecoder('utf-8', { fatal: true }).decode(chunk);
+        utf8 = true;
+        return s;
+      } catch (_) {
+        if (utf8 === true) return new TextDecoder('utf-8').decode(chunk);
+        utf8 = false;
+      }
+    }
+    return new TextDecoder('shift_jis').decode(chunk);
+  };
+  let recent = false;
+  /** @type {string[]} */
+  const materialRows = [];
+  /** @type {Array<[number, number]>} */
+  const vertexEdge = [];
+  let pos = 0;
+  while (pos < bytes.length) {
+    let end = bytes.indexOf(10, pos);
+    if (end < 0) end = bytes.length;
+    const lineEnd = end > pos && bytes[end - 1] === 13 ? end - 1 : end;
+    if (startsWith(pos, 'Vertex,') || startsWith(pos, 'PmxVertex,')) {
+      // fields 1 (index) and 8 (edge rate) are plain numbers
+      let field = 0;
+      let from = pos;
+      let idx = -1;
+      for (let i = pos; i <= lineEnd; i += 1) {
+        if (i === lineEnd || bytes[i] === 44) {
+          if (field === 1) idx = Number(String.fromCharCode(...bytes.subarray(from, i)));
+          if (field === 8) {
+            const rate = Number(String.fromCharCode(...bytes.subarray(from, i)));
+            if (idx >= 0 && Number.isFinite(rate)) vertexEdge.push([idx, rate]);
+            break;
+          }
+          field += 1;
+          from = i + 1;
+        }
+      }
+    } else if (startsWith(pos, 'Material,') || startsWith(pos, 'PmxMaterial,')) {
+      materialRows.push(decode(pos, lineEnd));
+    } else if (startsWith(pos, ';PmxHeader')) {
+      recent = true;
+    } else if (startsWith(pos, ';Material,') || startsWith(pos, ';Bone,') || startsWith(pos, ';Joint,')) {
+      // a recent PMXEditor writes more columns; the header row tells
+      const n = splitCsvRow(decode(pos, lineEnd)).length;
+      if (startsWith(pos, ';Material,') && n >= 31) recent = true;
+      if (startsWith(pos, ';Bone,') && n >= 40) recent = true;
+      if (startsWith(pos, ';Joint,') && n >= 30) recent = true;
+    }
+    pos = end + 1;
   }
-  if (start < 0) return [];
-  let end = find('\nFace,', start);
-  if (end < 0) end = Math.min(bytes.length, start + 80000);
-  const chunk = bytes.subarray(start, end);
-  let text;
-  try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(chunk);
-  } catch (_) {
-    text = new TextDecoder('shift_jis').decode(chunk);
-  }
-  const out = [];
-  for (const raw of text.split(/\r?\n/)) {
-    if (!raw) continue;
-    const row = splitCsvRow(raw);
-    if (row[0] !== 'Material' && row[0] !== 'PmxMaterial') continue;
-    const opacity = Number(row[6]);
-    out.push({ name: row[1] || '', opacity: Number.isFinite(opacity) ? opacity : 1 });
-  }
-  return out;
+  const o = recent ? 2 : 0;
+  const materials = materialRows.map((line) => {
+    const row = splitCsvRow(line);
+    const num = (k, def) => {
+      const v = row[k] === undefined || row[k] === '' ? NaN : Number(row[k]);
+      return Number.isFinite(v) ? v : def;
+    };
+    const flag = (k) => num(k, 0) !== 0;
+    return {
+      name: row[1] || '',
+      alpha: num(6, 1),
+      face: flag(14),
+      shadow: flag(15),
+      shadowMapDrop: flag(16),
+      shadowMapRender: flag(17),
+      edge: flag(18 + o),
+      edgeWidth: num(19 + o, 1),
+      edgeColor: [num(20 + o, 0), num(21 + o, 0), num(22 + o, 0), num(23 + o, 0)],
+      tex: row[24 + o] || null,
+      sphere: row[25 + o] || null,
+      sphereMode: num(26 + o, 0),
+    };
+  });
+  return { materials, vertexEdge };
 }
 
 /**

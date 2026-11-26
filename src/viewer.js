@@ -25,9 +25,16 @@
 
 import * as THREE from 'three';
 import { MMDLoader } from 'three/addons/loaders/MMDLoader.js';
-import { OutlineEffect } from 'three/addons/effects/OutlineEffect.js';
 import { mdfBool, mdfFloat, mdfVec } from './mdf.js';
 import { CameraState } from './camera.js';
+import { EDGE_OFFSET_SCALE, materialLooks, vertexEdgeRates, lightTerms } from './material-looks.js';
+import {
+  createModelUniforms, setModelLight, createSurfaceMaterial, createEdgeMaterial, createStageMaterial, imageHasAlpha,
+} from './look.js';
+
+// OpenGL mixes colours as stored; so do the shaders here (no sRGB decode / encode)
+THREE.ColorManagement.enabled = false;
+const SYSTEM_TOON_DIR = './appdata/toon/';
 
 // ammo.wasm.js fetches ammo.wasm.wasm from its own folder, so both ship in vendor/.
 const AMMO_SCRIPT = './vendor/three/examples/jsm/libs/ammo.wasm.js';
@@ -117,25 +124,22 @@ export function createViewer(container, options = {}) {
   const renderer = createWebGLRenderer(true);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(container.clientWidth || 640, container.clientHeight || 480);
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
   renderer.toneMapping = THREE.NoToneMapping;
   renderer.shadowMap.enabled = false;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.BasicShadowMap;
   container.appendChild(renderer.domElement);
 
-  // Render::updateLight: with the MMD-like cartoon default the diffuse term is 0 and
-  // brightness comes from ambient × toon texture; the directional light × gradient
-  // map plays that part in three.js.
-  const ambient = new THREE.AmbientLight(0xffffff, 0);
-  scene.add(ambient);
-  const dir = new THREE.DirectionalLight(0xffffff, 0.6 * 1.5 * Math.PI);
+  // The shaders in look.js do the lighting; this light only renders the shadow map.
+  const dir = new THREE.DirectionalLight(0xffffff, 1);
   dir.position.set(0.5, 1.0, 0.5);
   dir.shadow.camera.near = 0.1;
   dir.shadow.camera.far = 400;
-  dir.shadow.camera.left = -60;
-  dir.shadow.camera.right = 60;
-  dir.shadow.camera.top = 60;
-  dir.shadow.camera.bottom = -60;
+  // around the default stage (25 × 25) and the models on it
+  dir.shadow.camera.left = -30;
+  dir.shadow.camera.right = 30;
+  dir.shadow.camera.top = 30;
+  dir.shadow.camera.bottom = -30;
   scene.add(dir);
   scene.add(dir.target);
   let lightIntensity = 0.6;
@@ -147,8 +151,22 @@ export function createViewer(container, options = {}) {
   let useShadow = true;
   let useShadowMapping = false;
   let shadowDensity = 0.5;
-  /** @type {OutlineEffect | null} */
-  let outline = null;
+  let lightColor = [1, 1, 1];
+  let edgeThin = 0.7;
+  let edgeStep = 1.2;
+  /** uniforms shared by every model and the stage */
+  const look = {
+    uLightDir: { value: new THREE.Vector3(0.5, 1.0, 0.5).normalize() },
+    // Render::renderSceneShadowMap: light for the shadowed part of non-toon surfaces
+    uDimLight: { value: 0.34 - 0.13 * 1.0 },
+    uLightEdge: { value: 1 },
+    uShadowOn: { value: 0 },
+    uShadowMap: { value: null },
+    uShadowMatrix: { value: dir.shadow.matrix },
+    uShadowBias: { value: 0.002 },
+    // PMDModel::updateShadowColorTexCoord: toon coordinate of the shadowed part
+    uShadowToonV: { value: 1.0 },
+  };
 
   const manager = new THREE.LoadingManager();
   manager.setURLModifier((url) => urlModifier(url));
@@ -178,7 +196,6 @@ export function createViewer(container, options = {}) {
     const h = container.clientHeight || 480;
     camera.aspect = w / h;
     renderer.setSize(w, h);
-    outline?.setSize(w, h);
   }
 
   // ---------------------------------------------------------------- settings
@@ -196,15 +213,18 @@ export function createViewer(container, options = {}) {
     useShadow = mdfBool(mdf, 'use_shadow', true);
     useShadowMapping = mdfBool(mdf, 'use_shadow_mapping', false);
     shadowDensity = mdfFloat(mdf, 'shadow_density', 0.5);
-    renderer.shadowMap.enabled = useShadowMapping;
-    dir.castShadow = useShadowMapping;
+    const selfDensity = mdfFloat(mdf, 'shadow_mapping_self_density', 1.0);
+    look.uDimLight.value = 0.34 - 0.13 * selfDensity;
+    look.uShadowToonV.value = selfDensity;
     const mapSize = Math.max(256, Math.round(mdfFloat(mdf, 'shadow_mapping_texture_size', 2048)));
     dir.shadow.mapSize.set(mapSize, mapSize);
-    const edge = mdfFloat(mdf, 'cartoon_edge_width', 0.7);
-    edgeWidth = edge;
+    dir.shadow.map?.dispose();
+    dir.shadow.map = null;
+    setShadowMapping(useShadowMapping);
+    edgeThin = mdfFloat(mdf, 'cartoon_edge_width', 0.7);
+    edgeStep = mdfFloat(mdf, 'cartoon_edge_step', 1.2);
+    look.uLightEdge.value = mdfBool(mdf, 'light_edge', true) ? 1 : 0;
     info.style.display = mdfBool(mdf, 'show_fps', true) ? '' : 'none';
-    outline = cartoonOn ? new OutlineEffect(renderer, { defaultThickness: Math.max(0.0008, 0.003 * (edge / 0.7)) }) : null;
-    outline?.setSize(container.clientWidth || 640, container.clientHeight || 480);
     physicsWanted = true;
     bulletFloorOn = mdfBool(mdf, 'bullet_floor', true);
     gravityVec = new THREE.Vector3(0, -9.8 * mdfFloat(mdf, 'gravity_factor', 10), 0);
@@ -222,40 +242,68 @@ export function createViewer(container, options = {}) {
     distanceStep = mdfFloat(mdf, 'distance_step', 4.0);
     fovyStep = mdfFloat(mdf, 'fovy_step', 1.0);
     for (const m of models) updateShadowMesh(m);
+    refreshLooks();
   }
 
-  /** Render::updateLight: diffuse d and ambient a of the scene light. */
-  function lightTerms() {
-    if (!likeMmd) return { d: 0.2, a: lightIntensity * 1.5 };
-    if (cartoonOn) return { d: 0.0, a: lightIntensity * 1.5 };
-    return { d: lightIntensity, a: 1.0 };
+  /** Toon flag of a model: cartoon rendering on, and not MODEL_ADD …|OFF. */
+  function toonOf(model) {
+    return cartoonOn && model?.cartoon !== false;
   }
 
-  function updateLightIntensity() {
-    const { d, a } = lightTerms();
-    ambient.color.copy(dir.color);
-    // fixed-function OpenGL does not divide by π; three's Lambert BRDF does
-    if (likeMmd && cartoonOn) {
-      dir.intensity = a * Math.PI;
-      ambient.intensity = 0;
-    } else {
-      dir.intensity = d * Math.PI;
-      ambient.intensity = a * Math.PI;
+  /** Render::updateLight for each model (toon models and others differ) and the stage. */
+  function refreshLooks() {
+    for (const m of models) refreshModelLook(m);
+    if (stageModel?.userData.mmdLook) {
+      setModelLight(stageModel.userData.mmdLook.uniforms, lightColor, lightTerms(likeMmd, cartoonOn, lightIntensity), cartoonOn);
     }
+    const t = lightTerms(likeMmd, cartoonOn, lightIntensity);
+    const l = new THREE.Vector3(...lightDir).normalize();
+    for (const o of stageObjects) {
+      const s = o.userData.mmdStage;
+      if (!s) continue;
+      const ndl = Math.max(0, s.normal.dot(l));
+      const dim = look.uDimLight.value;
+      s.lit.value.set(...lightColor.map((c) => Math.min(1, 0.2 + c * (t.a + t.d * ndl))));
+      s.dim.value.setScalar(Math.min(1, 0.2 + dim + dim * ndl));
+    }
+  }
+
+  /** @param {import('./model.js').Model} model */
+  function refreshModelLook(model) {
+    const data = model.mesh.userData.mmdLook;
+    if (!data) return;
+    const toon = toonOf(model);
+    setModelLight(data.uniforms, lightColor, toon ? lightTerms(likeMmd, true, lightIntensity) : lightTerms(true, false, lightIntensity), toon);
+    data.uniforms.uEdgeOffset.value = edgeThin * EDGE_OFFSET_SCALE;
+    if (model.edgeMesh) model.edgeMesh.visible = toon;
   }
 
   /** LIGHTCOLOR @param {number[]} rgb */
   function setLightColor(rgb) {
-    dir.color.setRGB(rgb[0], rgb[1], rgb[2], THREE.SRGBColorSpace);
-    updateLightIntensity();
+    lightColor = [rgb[0], rgb[1], rgb[2]];
+    refreshLooks();
   }
 
   /** LIGHTDIRECTION @param {number[]} v */
   function setLightDirection(v) {
     lightDir = [v[0], v[1], v[2]];
+    look.uLightDir.value.set(v[0], v[1], v[2]).normalize();
     dir.position.set(v[0], v[1], v[2]).normalize().multiplyScalar(100);
     dir.target.position.set(0, 0, 0);
     for (const m of models) m.shadowUniform && m.shadowUniform.value.set(v[0], v[1], v[2]);
+    refreshLooks();
+  }
+
+  /** use_shadow_mapping / the x key */
+  function setShadowMapping(on) {
+    useShadowMapping = on;
+    renderer.shadowMap.enabled = on;
+    dir.castShadow = on;
+    look.uShadowOn.value = 0;
+    for (const m of models) {
+      updateShadowMesh(m);
+      updateCasterMesh(m);
+    }
   }
 
   // ------------------------------------------------------------------- stage
@@ -277,7 +325,7 @@ export function createViewer(container, options = {}) {
   function loadTexture(url) {
     return new Promise((resolve, reject) => {
       texLoader.load(url, (tex) => {
-        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.colorSpace = THREE.NoColorSpace;
         resolve(tex);
       }, undefined, () => reject(new Error(`texture ${url}`)));
     });
@@ -307,18 +355,16 @@ export function createViewer(container, options = {}) {
       geo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 1, 1, 1, 0, 0, 1, 0], 2));
       geo.setIndex([0, 1, 2, 2, 1, 3]);
       geo.computeVertexNormals();
-      // fixed-function lighting of a white material: ambient a + diffuse d × max(0, n·l)
+      // fixed-function lighting of a white material (refreshLooks)
       const n = new THREE.Vector3().crossVectors(new THREE.Vector3(...b).sub(new THREE.Vector3(...a)), new THREE.Vector3(...e).sub(new THREE.Vector3(...a))).normalize();
-      const l = new THREE.Vector3(...lightDir).normalize();
-      const { a: amb, d: dif } = lightTerms();
-      const k = Math.min(1, amb + dif * Math.max(0, Math.abs(n.dot(l))));
-      const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
-      mat.color.setRGB(k * dir.color.r, k * dir.color.g, k * dir.color.b);
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.receiveShadow = true;
+      const lit = { value: new THREE.Vector3(1, 1, 1) };
+      const dim = { value: new THREE.Vector3(1, 1, 1) };
+      const mesh = new THREE.Mesh(geo, createStageMaterial(tex, lit, dim, look));
+      mesh.userData.mmdStage = { normal: n, lit, dim };
       mesh.renderOrder = -2;
       scene.add(mesh);
       stageObjects.push(mesh);
+      refreshLooks();
     };
     await quad(floorUrl, [-w, 0, d], [w, 0, d], [w, 0, -d], [-w, 0, -d]);
     await quad(backUrl, [-w, 0, -d], [w, 0, -d], [w, h, -d], [-w, h, -d]);
@@ -327,58 +373,201 @@ export function createViewer(container, options = {}) {
   /** STAGE|file.pmd: a 3D stage model. @param {string} path */
   async function setStageModel(path) {
     clearStage();
-    const { mesh } = await loadMesh(path);
-    mesh.receiveShadow = true;
+    const { mesh } = await loadMesh(path, null);
     stageModel = mesh;
     scene.add(mesh);
+    refreshLooks();
   }
 
   // ------------------------------------------------------------------ models
 
+  /** Texture settings of PMDTexture (no mip-maps, rows as stored, colours as stored). */
+  function setupTexture(tex, wrap) {
+    const apply = (t) => {
+      t.flipY = false;
+      t.colorSpace = THREE.NoColorSpace;
+      t.minFilter = THREE.LinearFilter;
+      t.magFilter = THREE.LinearFilter;
+      t.generateMipmaps = false;
+      t.wrapS = wrap;
+      t.wrapT = wrap;
+      t.needsUpdate = Boolean(t.image);
+    };
+    if (Array.isArray(tex.readyCallbacks)) tex.readyCallbacks.push(apply);
+    else apply(tex);
+    return tex;
+  }
+
+  /** Load a texture by virtual path; resolves once the image is there (or failed). */
+  function loadModelTexture(path, wrap) {
+    const tex = new THREE.Texture();
+    tex.userData.ready = new Promise((resolve) => {
+      texLoader.load(urlModifier(`${VFS_PREFIX}${path}`), (t) => {
+        tex.image = t.image;
+        setupTexture(tex, wrap);
+        resolve(tex);
+      }, undefined, () => {
+        log(`テクスチャを読めません: ${path}`);
+        resolve(null);
+      });
+    });
+    setupTexture(tex, wrap);
+    return tex;
+  }
+
+  /** Is this virtual path one of the picked files? */
+  function hasFile(path) {
+    const url = `${VFS_PREFIX}${path}`;
+    return urlModifier(url) !== url;
+  }
+
   /**
-   * Parse and build a .pmd / .pmx; the parsed data is kept for bone types.
+   * Toon textures 0-10 of a model (PMDModel_parse): a file next to the model
+   * (toon0.bmp, or the name listed in the PMD), else the system one.
+   */
+  function modelToons(data, dirPath) {
+    const toons = [];
+    for (let j = 0; j <= 10; j += 1) {
+      const sys = j === 0 ? 'toon0.bmp' : `toon${String(j).padStart(2, '0')}.bmp`;
+      const listed = j > 0 ? data.toonTextures?.[j - 1]?.fileName : null;
+      const local = `${dirPath}${listed || sys}`;
+      if (hasFile(local)) toons.push(loadModelTexture(local, THREE.ClampToEdgeWrapping));
+      else {
+        const t = texLoader.load(`${SYSTEM_TOON_DIR}${sys}`);
+        toons.push(setupTexture(t, THREE.ClampToEdgeWrapping));
+      }
+    }
+    return toons;
+  }
+
+  /**
+   * Parse and build a .pmd / .pmx with MMDAgent-EX's look; the parsed data is
+   * kept for bone types.
    * @param {string} path virtual path for the URL modifier
+   * @param {ReturnType<typeof import('./modelext.js').parseModelCsv> | null} csv "<model>.csv"
    * @returns {Promise<{ mesh: THREE.SkinnedMesh, data: any }>}
    */
-  async function loadMesh(path) {
+  async function loadMesh(path, csv) {
     const url = `${VFS_PREFIX}${path}`;
     const res = await fetch(urlModifier(url));
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const buffer = await res.arrayBuffer();
     const parser = loader._getParser();
-    const ext = path.toLowerCase().split('.').pop();
-    const data = ext === 'pmx' ? parser.parsePmx(buffer, true) : parser.parsePmd(buffer, true);
+    const isPmx = path.toLowerCase().endsWith('.pmx');
+    const data = isPmx ? parser.parsePmx(buffer, true) : parser.parsePmd(buffer, true);
     const resourcePath = url.slice(0, url.lastIndexOf('/') + 1);
     // three converts type-2 bodies under a simulated parent into type 1; MMDAgent-EX does not
     const mesh = loader.meshBuilder.setCrossOrigin(loader.crossOrigin).build(data, resourcePath, undefined, (err) => log(`テクスチャを読めません: ${err?.message || err}`));
     restoreNativeRigidBodyTypes(mesh);
-    tuneMaterials(mesh);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
+    applyLook(mesh, data, isPmx, csv, path.slice(0, path.lastIndexOf('/') + 1));
     return { mesh, data };
   }
 
-  function tuneMaterials(root) {
-    const mats = Array.isArray(root.material) ? root.material : [root.material];
-    for (const mat of mats) {
-      if (!mat) continue;
-      mat.toneMapped = false;
-      // PMDMaterial::setup: avgcol = clamp(diffuse * 0.5 + ambient); three keeps ambient in emissive
-      const color = mat.color || mat.diffuse;
-      if (color && mat.emissive) {
-        const undo = mat.map ? 5 : 1;
-        color.r = Math.min(1, color.r * 0.5 + mat.emissive.r * undo);
-        color.g = Math.min(1, color.g * 0.5 + mat.emissive.g * undo);
-        color.b = Math.min(1, color.b * 0.5 + mat.emissive.b * undo);
-        mat.emissive.setRGB(0, 0, 0);
+  /**
+   * Replace three's MMD materials with MMDAgent-EX's (look.js) and keep what the
+   * edge, shadow and material order need.
+   */
+  function applyLook(mesh, data, isPmx, csv, dirPath) {
+    const built = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const { materials: looks, hasExt } = materialLooks(data, isPmx, csv);
+    const toons = modelToons(data, dirPath);
+    const uniforms = createModelUniforms(look);
+    const sameFile = (a, b) => String(a || '').replace(/\\/g, '/').toLowerCase() === String(b || '').replace(/\\/g, '/').toLowerCase();
+    const surfaces = looks.map((lk, i) => {
+      const b = built[i] || {};
+      let map = b.map || null;
+      let sphere = b.matcap || null;
+      let sphereAdd = b.matcapCombine === THREE.AddOperation;
+      // PMDMaterial::setExtParam: textures named in the CSV
+      const pmdNames = isPmx ? [] : String(data.materials[i].fileName || '').split('*');
+      const pmdMain = pmdNames.find((n) => n && !/\.sp[ha]$/i.test(n)) || null;
+      const pmdSphere = pmdNames.find((n) => /\.sp[ha]$/i.test(n)) || null;
+      if (lk.tex && !sameFile(lk.tex, pmdMain)) map = loadModelTexture(`${dirPath}${lk.tex}`, THREE.RepeatWrapping);
+      if (lk.sphere && (lk.sphereMode === 1 || lk.sphereMode === 2)) {
+        if (!sameFile(lk.sphere, pmdSphere)) sphere = loadModelTexture(`${dirPath}${lk.sphere}`, THREE.RepeatWrapping);
+        sphereAdd = lk.sphereMode === 2;
       }
-      if ('emissiveIntensity' in mat) mat.emissiveIntensity = 0;
-      if (mat.isMMDToonMaterial && !mat.matcap && mat.defines) {
-        delete mat.defines.MATCAP;
-        delete mat.defines.MATCAP_BLENDING_ADD;
-        mat.needsUpdate = true;
+      if (map && map === b.map) setupTexture(map, THREE.RepeatWrapping);
+      if (sphere && sphere === b.matcap) setupTexture(sphere, THREE.RepeatWrapping);
+      let toon = toons[0];
+      if (isPmx) {
+        const m = data.materials[i];
+        if (m.toonFlag === 1 && m.toonIndex >= 0 && m.toonIndex < 10) toon = toons[m.toonIndex + 1];
+        else if (m.toonFlag === 0 && m.toonIndex >= 0 && data.textures?.[m.toonIndex]) toon = loadModelTexture(`${dirPath}${data.textures[m.toonIndex]}`, THREE.ClampToEdgeWrapping);
+      } else if (lk.toonIndex >= 0 && lk.toonIndex < 10) {
+        toon = toons[lk.toonIndex + 1];
       }
+      const toonId = toon === toons[0] ? 0 : 1;
+      // Render::renderSceneShadowMap: toon0 when the material takes no self shadow
+      const toonShadow = !lk.shadowMapRender ? toons[0] : toonId === 0 ? toons[1] : toon;
+      const mat = createSurfaceMaterial(lk, { map, sphere, sphereAdd, toon, toonShadow }, uniforms);
+      mat.opacity = lk.alpha;
+      mat.transparent = lk.alpha < 0.98;
+      mat.name = b.name || lk.name || '';
+      // PMDModel::updateMaterialOrder: textures with transparent pixels are drawn after the opaque ones
+      const checkAlpha = (t) => {
+        if (t?.image && imageHasAlpha(t.image)) {
+          mat.userData.mmd.translucent = true;
+          mat.transparent = true;
+        }
+      };
+      if (map) {
+        if (Array.isArray(map.readyCallbacks)) map.readyCallbacks.push(checkAlpha);
+        else if (map.userData.ready) map.userData.ready.then(checkAlpha);
+        else checkAlpha(map);
+      }
+      b.dispose?.();
+      return mat;
+    });
+    mesh.material = surfaces;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    const rates = vertexEdgeRates(data, isPmx, looks, csv?.vertexEdge);
+    mesh.geometry.setAttribute('edgeRate', new THREE.BufferAttribute(rates, 1));
+    mesh.userData.mmdLook = { looks, hasExt, uniforms, centers: materialCenters(mesh.geometry) };
+  }
+
+  /** Centre and radius of each material group in the rest pose (PMDMaterial::computeCenterVertex). */
+  function materialCenters(geometry) {
+    const pos = geometry.getAttribute('position');
+    const index = geometry.getIndex();
+    return geometry.groups.map((g) => {
+      const c = new THREE.Vector3();
+      const v = new THREE.Vector3();
+      const n = Math.max(1, g.count);
+      for (let k = g.start; k < g.start + g.count; k += 1) c.add(v.fromBufferAttribute(pos, index ? index.getX(k) : k));
+      c.divideScalar(n);
+      let r = 0;
+      for (let k = g.start; k < g.start + g.count; k += 1) r = Math.max(r, v.fromBufferAttribute(pos, index ? index.getX(k) : k).distanceTo(c));
+      return { materialIndex: g.materialIndex, center: c, radius: r };
+    });
+  }
+
+  const tmpMat = new THREE.Matrix4();
+  const tmpVec = new THREE.Vector3();
+  /**
+   * PMDModel::updateMaterialOrder: opaque materials first in file order, then the
+   * others from far to near.
+   * @param {THREE.SkinnedMesh} mesh
+   */
+  function sortMaterials(mesh) {
+    const data = mesh.userData.mmdLook;
+    if (!data) return;
+    const mats = mesh.material;
+    tmpMat.multiplyMatrices(camera.matrixWorldInverse, mesh.matrixWorld);
+    const opaque = [];
+    const blended = [];
+    for (const c of data.centers) {
+      const m = mats[c.materialIndex];
+      if (m?.transparent) {
+        const z = tmpVec.copy(c.center).applyMatrix4(tmpMat).z + c.radius;
+        blended.push({ c, z });
+      } else opaque.push(c);
     }
+    if (!blended.length) return;
+    blended.sort((a, b) => a.z - b.z);
+    const byIndex = new Map(mesh.geometry.groups.map((g) => [g.materialIndex, g]));
+    mesh.geometry.groups = [...opaque.map((c) => byIndex.get(c.materialIndex)), ...blended.map((x) => byIndex.get(x.c.materialIndex))].filter(Boolean);
   }
 
   function restoreNativeRigidBodyTypes(mesh) {
@@ -391,37 +580,45 @@ export function createViewer(container, options = {}) {
     }
   }
 
-  /** Material opacities from "<model>.csv". */
-  function applyMaterialExt(mesh, list) {
-    if (!list?.length) return;
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    for (let i = 0; i < list.length && i < mats.length; i += 1) {
-      const a = Number(list[i]?.opacity);
-      if (!Number.isFinite(a) || !mats[i]) continue;
-      mats[i].opacity = a;
-      mats[i].transparent = a < 1;
-      if (a <= 0) {
-        mats[i].visible = false;
-        mats[i].depthWrite = false;
-      }
-    }
+  const hiddenMaterial = new THREE.MeshBasicMaterial({ visible: false });
+
+  /** A mesh drawn with the model's skeleton and morphs, as a child of the model. */
+  function skinnedChild(model, material) {
+    const mesh = new THREE.SkinnedMesh(model.mesh.geometry, material);
+    mesh.bind(model.mesh.skeleton, model.mesh.bindMatrix);
+    mesh.morphTargetInfluences = model.mesh.morphTargetInfluences;
+    mesh.morphTargetDictionary = model.mesh.morphTargetDictionary;
+    mesh.frustumCulled = false;
+    return mesh;
+  }
+
+  /** Edges of the materials with the edge flag (PMDModel::renderModel). */
+  function createEdgeMesh(model) {
+    const data = model.mesh.userData.mmdLook;
+    if (!data) return;
+    const mats = data.looks.map((lk) => (lk.edge ? createEdgeMaterial(lk, data.hasExt, data.uniforms) : hiddenMaterial));
+    model.edgeMaterials = mats.filter((m) => m !== hiddenMaterial);
+    if (!model.edgeMaterials.length) return;
+    model.edgeMesh = skinnedChild(model, mats);
+    model.mesh.add(model.edgeMesh);
   }
 
   /**
    * The flat shadow MMDAgent-EX draws on the floor (use_shadow without shadow
-   * mapping): the model projected along the light onto y = 0, in one shade.
+   * mapping): the materials with the shadow flag projected along the light
+   * onto y = 0, in one shade (PMDModel::renderForShadow).
    * @param {import('./model.js').Model} model
    */
   function updateShadowMesh(model) {
     if (model.shadowMesh) {
       model.mesh.remove(model.shadowMesh);
-      model.shadowMesh.material.dispose();
+      model.shadowMaterial?.dispose();
       model.shadowMesh = null;
     }
     if (!useShadow || useShadowMapping) return;
     const lightUniform = { value: new THREE.Vector3(lightDir[0], lightDir[1], lightDir[2]) };
     const mat = new THREE.MeshBasicMaterial({
-      color: 0x000000, transparent: true, opacity: shadowDensity, depthWrite: false,
+      color: 0x000000, transparent: true, opacity: shadowDensity, depthWrite: false, side: THREE.DoubleSide,
       stencilWrite: true, stencilRef: 0, stencilFunc: THREE.EqualStencilFunc, stencilZPass: THREE.IncrementStencilOp,
     });
     mat.onBeforeCompile = (shader) => {
@@ -437,16 +634,34 @@ export function createViewer(container, options = {}) {
           vec4 mvPosition = viewMatrix * wp;
           gl_Position = projectionMatrix * mvPosition;`);
     };
-    const mesh = new THREE.SkinnedMesh(model.mesh.geometry, mat);
-    mesh.bind(model.mesh.skeleton, model.mesh.bindMatrix);
-    mesh.morphTargetInfluences = model.mesh.morphTargetInfluences;
-    mesh.morphTargetDictionary = model.mesh.morphTargetDictionary;
+    const looks = model.mesh.userData.mmdLook?.looks;
+    const mesh = skinnedChild(model, looks ? looks.map((lk) => (lk.shadow ? mat : hiddenMaterial)) : mat);
     mesh.renderOrder = -1;
-    mesh.frustumCulled = false;
-    mesh.userData.outlineParameters = { visible: false };
     model.shadowMesh = mesh;
+    model.shadowMaterial = mat;
     model.shadowUniform = lightUniform;
     // a child, so it follows the model's placement and visibility
+    model.mesh.add(mesh);
+  }
+
+  /**
+   * Shadow mapping: the materials that drop a shadow, written only to the shadow
+   * map, back faces as in Render::renderSceneShadowMap.
+   * @param {import('./model.js').Model} model
+   */
+  function updateCasterMesh(model) {
+    if (model.casterMesh) {
+      model.mesh.remove(model.casterMesh);
+      model.casterMaterial?.dispose();
+      model.casterMesh = null;
+    }
+    if (!useShadowMapping) return;
+    const looks = model.mesh.userData.mmdLook?.looks;
+    const mat = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, depthTest: false, shadowSide: THREE.BackSide });
+    const mesh = skinnedChild(model, looks ? looks.map((lk) => (lk.shadowMapDrop ? mat : hiddenMaterial)) : mat);
+    mesh.castShadow = true;
+    model.casterMesh = mesh;
+    model.casterMaterial = mat;
     model.mesh.add(mesh);
   }
 
@@ -454,8 +669,11 @@ export function createViewer(container, options = {}) {
   function addModel(model) {
     models.add(model);
     scene.add(model.mesh);
-    model.mesh.castShadow = useShadowMapping;
+    createEdgeMesh(model);
     updateShadowMesh(model);
+    updateCasterMesh(model);
+    refreshModelLook(model);
+    model.onCartoonChange = () => refreshModelLook(model);
     if (physicsReady) enableModelPhysics(model);
   }
 
@@ -466,6 +684,9 @@ export function createViewer(container, options = {}) {
     model.disposePhysics();
     model.mesh.geometry.dispose();
     for (const m of model.materials) m.dispose();
+    for (const m of model.edgeMaterials || []) m.dispose();
+    model.shadowMaterial?.dispose();
+    model.casterMaterial?.dispose();
   }
 
   // ----------------------------------------------------------------- physics
@@ -744,8 +965,12 @@ export function createViewer(container, options = {}) {
     options.onAfterSteps?.(sec * 30);
     cam.update(sec);
     applyCamera();
-    if (cartoonOn && outline) outline.render(scene, camera);
-    else renderer.render(scene, camera);
+    for (const m of models) sortMaterials(m.mesh);
+    renderer.render(scene, camera);
+    // the shadow map exists after the first frame with shadow mapping on
+    const map = useShadowMapping ? dir.shadow.map?.texture || null : null;
+    look.uShadowMap.value = map;
+    look.uShadowOn.value = map ? 1 : 0;
   }
 
   const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => resize()) : null;
@@ -755,7 +980,6 @@ export function createViewer(container, options = {}) {
   rafId = requestAnimationFrame(animate);
 
   // ------------------------------------------------------- key operations
-  let edgeWidth = 0.7;
   let physicsPaused = false;
   let wireframe = false;
   const info = document.createElement('div');
@@ -793,17 +1017,13 @@ ${t.map((v) => v.toFixed(2)).join(', ')} | ${cam.angle.map((v) => v.toFixed(2)).
         for (const m of models) updateShadowMesh(m);
         return true;
       case 'x':
-        useShadowMapping = !useShadowMapping;
-        renderer.shadowMap.enabled = useShadowMapping;
-        dir.castShadow = useShadowMapping;
-        for (const m of models) { m.mesh.castShadow = useShadowMapping; updateShadowMesh(m); }
-        for (const o of stageObjects) o.material.needsUpdate = true;
+        setShadowMapping(!useShadowMapping);
         return true;
       case 'k':
       case 'K':
-        edgeWidth = Math.max(0, edgeWidth + (key === 'k' ? 0.1 : -0.1));
-        if (outline) outline = new OutlineEffect(renderer, { defaultThickness: Math.max(0.0001, 0.003 * (edgeWidth / 0.7)) });
-        outline?.setSize(container.clientWidth || 640, container.clientHeight || 480);
+        // MMDAgent::changeEdgeWidth
+        edgeThin = Math.min(1000, Math.max(0.001, key === 'k' ? edgeThin * edgeStep : edgeThin / edgeStep));
+        for (const m of models) refreshModelLook(m);
         return true;
       case 'p':
         physicsPaused = !physicsPaused;
@@ -848,7 +1068,6 @@ ${t.map((v) => v.toFixed(2)).join(', ')} | ${cam.angle.map((v) => v.toFixed(2)).
     setStage,
     setStageModel,
     loadMesh,
-    applyMaterialExt,
     addModel,
     removeModel,
     enablePhysics,

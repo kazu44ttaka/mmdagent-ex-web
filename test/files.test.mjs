@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createVfs, normalizePath, joinPath, decodeText } from '../src/vfs.js';
 import { parseMdf, websocketUrlFromMdf } from '../src/mdf.js';
-import { parseMaterialCsv, parseMessageLines, splitCsvRow } from '../src/modelext.js';
+import { parseModelCsv, parseMessageLines, splitCsvRow } from '../src/modelext.js';
 import { parseShapeMap } from '../src/shapemap.js';
 
 test('paths: separators, dots, and case-insensitive lookup', () => {
@@ -26,10 +26,33 @@ test('mdf settings and the WebSocket address Plugin_Remote would use', () => {
   assert.equal(websocketUrlFromMdf(new Map()), 'ws://localhost:80/');
 });
 
-test('material opacities from the Material rows of a model CSV', () => {
-  const csv = 'PmdModel,a\nVertex,0,1\nMaterial,"髪",1,1,1,1,0.5,x\nMaterial,"怒り",1,1,1,1,0,x\nFace,0\n';
-  const bytes = new TextEncoder().encode(csv);
-  assert.deepEqual(parseMaterialCsv(bytes), [{ name: '髪', opacity: 0.5 }, { name: '怒り', opacity: 0 }]);
+test('model CSV: Material rows (old and recent PMXEditor columns) and vertex edge rates', () => {
+  const old = [
+    'PmdModel,a',
+    'Vertex,0,1,2,3,0,1,0,0.5,0.1,0.2',
+    'Vertex,1,1,2,3,0,1,0,1',
+    'Material,"髪","",1,1,1,0.5,0,0,0,5,0.7,0.7,0.7,1,1,0,0,1,0.45,0.4,0.4,0.4,1,"tex/hair.png","",0',
+    'Material,"怒り","",1,1,1,0,0,0,0,5,0.7,0.7,0.7,0,0,0,0,0,1,0,0,0,1,"","",0',
+    'Face,0',
+  ].join('\r\n');
+  const a = parseModelCsv(new TextEncoder().encode(old));
+  assert.deepEqual(a.vertexEdge, [[0, 0.5], [1, 1]]);
+  assert.equal(a.materials.length, 2);
+  assert.deepEqual(
+    { ...a.materials[0] },
+    { name: '髪', alpha: 0.5, face: true, shadow: true, shadowMapDrop: false, shadowMapRender: false, edge: true, edgeWidth: 0.45, edgeColor: [0.4, 0.4, 0.4, 1], tex: 'tex/hair.png', sphere: null, sphereMode: 0 },
+  );
+  assert.equal(a.materials[1].alpha, 0);
+  // a recent PMXEditor adds vertex colour and draw mode, moving the edge columns by 2
+  const header = ';Material,' + Array.from({ length: 30 }, (_, i) => `c${i}`).join(',');
+  const recent = [header, 'Material,"顔","",1,1,1,1,0,0,0,5,0.75,0.75,0.75,0,1,1,1,0,0,1,0.45,0.4,0.4,0.4,1,"tex/face.png","",0,"",""', ''].join('\n');
+  const b = parseModelCsv(new TextEncoder().encode(recent)).materials[0];
+  assert.equal(b.edge, true);
+  assert.equal(b.edgeWidth, 0.45);
+  assert.deepEqual(b.edgeColor, [0.4, 0.4, 0.4, 1]);
+  assert.equal(b.tex, 'tex/face.png');
+  assert.equal(b.face, false);
+  assert.equal(b.shadow, true);
   assert.deepEqual(splitCsvRow('a,"b,c",d'), ['a', 'b,c', 'd']);
 });
 

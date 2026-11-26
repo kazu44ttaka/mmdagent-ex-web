@@ -25,7 +25,7 @@ import { Model } from './model.js';
 import { parseVmd } from './vmd.js';
 import { CameraMotion } from './camera.js';
 import { parseShapeMap } from './shapemap.js';
-import { parseMaterialCsv, parseMessageLines } from './modelext.js';
+import { parseModelCsv, parseMessageLines } from './modelext.js';
 import {
   parseVec3, quatFromEulerDeg, quatIdentity, quatMul, quatNearest, quatRotate, quatFromAxisAngle, vadd, vlength,
 } from './math.js';
@@ -139,9 +139,8 @@ export function createCore(host) {
     const myToken = token;
     loading.set(alias, []);
     (async () => {
-      const { mesh, data } = await viewer.loadMesh(real);
       const csv = await vfs.bytes(`${real}.csv`);
-      if (csv) viewer.applyMaterialExt(mesh, parseMaterialCsv(csv));
+      const { mesh, data } = await viewer.loadMesh(real, csv ? parseModelCsv(csv) : null);
       const model = new Model({
         alias, path: real, mesh, data,
         position: changeOf ? changeOf.rootPos : (pos || [0, 0, 0]),

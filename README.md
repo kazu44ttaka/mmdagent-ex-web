@@ -59,8 +59,8 @@ moves it, and the wheel changes the distance, as in MMDAgent-EX.
 
 | Area | Supported |
 |---|---|
-| Content | `.mdf` settings (camera, light, cartoon rendering, edge width, projection shadow / shadow mapping, physics, stage size, `max_num_model`, `lipsync_priority`, `show_fps`), the FST of the same name and its sub FSTs, `%INCLUDE`, variables, `$a==b` tests, `@regexp@` inputs |
-| Models | `MODEL_ADD` (several models, position / rotation, cartoon ON/OFF, attaching to another model's bone), `MODEL_CHANGE`, `MODEL_CHANGE_ASYNC`, `MODEL_DELETE` (fade out, attached models too), `<model>.shapemap` or the system `default.shapemap`, `<model>.lip`, `<model>.csv` (material opacity), `<model>.loadmessage` / `.deletemessage`, PMD bone types (IK, under-rotate, follow-rotate) |
+| Content | `.mdf` settings (camera, light, cartoon rendering, edge width and `light_edge`, projection shadow / shadow mapping, physics, stage size, `max_num_model`, `lipsync_priority`, `show_fps`), the FST of the same name and its sub FSTs, `%INCLUDE`, variables, `$a==b` tests, `@regexp@` inputs |
+| Models | `MODEL_ADD` (several models, position / rotation, cartoon ON/OFF, attaching to another model's bone), `MODEL_CHANGE`, `MODEL_CHANGE_ASYNC`, `MODEL_DELETE` (fade out, attached models too), `<model>.shapemap` or the system `default.shapemap`, `<model>.lip`, `<model>.csv` (material edges, opacity, double-sided and shadow flags, textures, vertex edge rates), `<model>.loadmessage` / `.deletemessage`, PMD bone types (IK, under-rotate, follow-rotate) |
 | Motions | `MOTION_ADD` (priority, `FULL` / `PART`, `ONCE` / `LOOP`, smooth start / loop / end, re-position), `MOTION_CHANGE`, `MOTION_RESET`, `MOTION_ACCELERATE`, `MOTION_CONFIGURE` (replace / add / multiply modes, blend rate), `MOTION_DELETE`, VMD IK and display switches, `LIPSYNC_START` / `LIPSYNC_STOP` (lip.txt) |
 | Placement | `MOVE_START` / `MOVE_STOP`, `TURN_START` / `TURN_STOP`, `ROTATE_START` / `ROTATE_STOP` (local / global, speed) |
 | Scene | `STAGE` (floor and background images, or a 3D stage model), `CAMERA` (view, timed move, following a bone, camera VMD), `LIGHTCOLOR`, `LIGHTDIRECTION` |
@@ -83,8 +83,9 @@ Plugin_Remote does.
 - **Speech synthesis and recognition**: the browser's voices and recognizer stand in for Open_JTalk / Flite and Julius.
   The browser gives no phoneme timing, so `SYNTH_START` moves the mouth in an even pattern, and Julius-specific events
   (`RECOG_EVENT_MODIFY`, `_GMM`, `_AWAY`, `_OVERFLOW`, `_RAPID`) do not occur.
-- **Rendering**: drawn with three.js, so the look is close but not pixel-identical. PMX bone / material / UV morphs, the
-  PMX layered bone order and local grants, `doppel_shadow`, the diffusion post-filter, `light_edge` and
+- **Rendering**: three.js draws with shaders that follow MMDAgent-EX's fixed-function lighting, toon textures, sphere maps
+  and edges, so colours match; anti-aliasing and the shadow map's coverage differ slightly. PMX bone / material / UV
+  morphs, the PMX layered bone order and local grants, `doppel_shadow`, the diffusion post-filter and
   `cartoon_edge_selected_color` are not applied. On-screen parts are HTML in MMDAgent-EX's colours, and `BUTTON_ADD`
   coordinates are approximate.
 - **Not available in a browser**: `TRANSPARENT_*`, `REMOTEKEY_DOWN` / `UP`, `RECOG_RECORD_*`, `LOG_UPLOAD`,
@@ -110,9 +111,10 @@ npm test   # node --test (Node.js 20 or later); no packages to install
 | `src/bindings.js`, `src/lipsync-motion.js` | KeyValue and bindings, LIPSYNC motions |
 | `src/plugins.js`, `src/speech.js`, `src/ui.js`, `src/system.js` | plugins, Web Speech, on-screen parts, other commands |
 | `src/viewer.js` | three.js rendering, stage, shadows, shared physics world |
+| `src/look.js`, `src/material-looks.js` | MMDAgent-EX's model look: material settings, lighting, toon, edges |
 
-three.js r160 and Ammo.js are bundled in `vendor/`, and `appdata/` holds MMDAgent-EX's `lip.txt`, `default.shapemap`
-and Julius phoneme model, so the page works offline. To rebuild Julius, install [emsdk](https://emscripten.org/) and run
+three.js r160 and Ammo.js are bundled in `vendor/`, and `appdata/` holds MMDAgent-EX's `lip.txt`, `default.shapemap`,
+toon textures and Julius phoneme model, so the page works offline. To rebuild Julius, install [emsdk](https://emscripten.org/) and run
 `julius/build.sh <MMDAgent-EX source folder>`.
 
 ## License

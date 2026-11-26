@@ -16,10 +16,11 @@ Bullet physics parameters come from them.
 The ports cover Plugin_VIManager (FST), Library_MMDFiles MotionManager / MotionController / VMD (motions and Bézier
 tables), PMDModel / PMDBone (bone update order), Library_MMDAgent BoneFaceControl, LipSync, Render (camera),
 CameraController, PMDObject (placement), Plugin_Remote (protocol, Avatar, Speak), Plugin_Variables, Plugin_Audio,
-Plugin_TextArea and Plugin_LookAt (BoneController).
+Plugin_TextArea and Plugin_LookAt (BoneController), and the model look: PMDMaterial (settings and the model CSV),
+PMDModel rendering (lighting, toon textures, sphere maps, edges, material order) and Render (light, shadow mapping).
 
-`appdata/lip.txt` and `appdata/default.shapemap` are copied unchanged from `Release/AppData/` of MMDAgent-EX
-(Apache License 2.0).
+`appdata/lip.txt`, `appdata/default.shapemap` and the toon textures in `appdata/toon/` are copied unchanged from
+`Release/AppData/` of MMDAgent-EX (Apache License 2.0).
 
 ## Julius — `julius/dist/`, `appdata/julius/`
 

@@ -335,7 +335,6 @@ export function createTextArea(host) {
         if (!alias || !wh || !ts || !bg || !color || !pos || !rot) return;
         const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ transparent: true, side: THREE.DoubleSide, depthWrite: false }));
         mesh.visible = false;
-        mesh.userData.outlineParameters = { visible: false };
         const group = new THREE.Group();
         group.position.set(pos[0], pos[1], pos[2]);
         const q = quatFromEulerDeg(rot);

@@ -128,6 +128,10 @@ export class Model {
 
     this.materials = Array.isArray(this.mesh.material) ? this.mesh.material : [this.mesh.material];
     this.baseOpacity = this.materials.map((m) => m.opacity);
+    /** @type {THREE.Material[]} edge materials (set by the viewer) */
+    this.edgeMaterials = [];
+    /** @type {(() => void) | undefined} */
+    this.onCartoonChange = undefined;
     this.setCartoon(opts.cartoon);
     this.mesh.matrixAutoUpdate = false;
     this.updateRootBone();
@@ -362,11 +366,10 @@ export class Model {
 
   // ------------------------------------------------------------- look
 
-  /** @param {boolean} on */
+  /** Cartoon rendering (toon shading and edges) for this model. @param {boolean} on */
   setCartoon(on) {
-    for (const m of this.materials) {
-      m.userData.outlineParameters = { ...(m.userData.outlineParameters || {}), visible: on && (m.userData.outlineParameters?.visible !== false) };
-    }
+    this.cartoon = on !== false;
+    this.onCartoonChange?.();
   }
 
   /** Fade in after loading and out on MODEL_DELETE; true once fully gone. @param {number} frames */
@@ -384,11 +387,17 @@ export class Model {
       }
       this.alpha = this.disappearFrame / ALPHA_FRAMES;
     }
+    // PMDModel::renderModel: alpha 0.98 and above is drawn as 1
     this.materials.forEach((m, i) => {
-      const o = this.baseOpacity[i] * this.alpha;
+      let o = this.baseOpacity[i] * this.alpha;
+      if (o >= 0.98) o = 1;
       m.opacity = o;
-      m.transparent = o < 1;
+      m.transparent = Boolean(m.userData.mmd?.translucent) || this.baseOpacity[i] < 0.98 || o < 1;
     });
+    for (const m of this.edgeMaterials) {
+      m.opacity = (m.userData.mmd?.baseAlpha ?? 1) * this.alpha;
+      m.transparent = m.opacity < 1;
+    }
     return ended;
   }
 
