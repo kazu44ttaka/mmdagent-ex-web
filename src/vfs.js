@@ -151,3 +151,81 @@ export function createVfs(entries) {
 }
 
 /** @typedef {ReturnType<typeof createVfs>} Vfs */
+
+/**
+ * The URL of a file under `baseUrl`, with each path segment percent-encoded.
+ * @param {string} baseUrl folder URL ending with "/"
+ * @param {string} path relative path
+ */
+export function fileUrl(baseUrl, path) {
+  const encoded = normalizePath(path).split('/').map(encodeURIComponent).join('/');
+  return new URL(encoded, baseUrl).href;
+}
+
+/**
+ * The same tree as `createVfs`, for content served over HTTP: `paths` lists
+ * the files (relative to `baseUrl`), and each file is fetched when it is read.
+ * A launcher such as MaAI-SDS serves the content folder and its file list, so
+ * the page can open a scene without the folder dialog.
+ * @param {string} baseUrl folder URL; a trailing "/" is added when missing
+ * @param {string[]} paths
+ * @param {typeof fetch} [fetchImpl]
+ */
+export function createHttpVfs(baseUrl, paths, fetchImpl = (...args) => fetch(...args)) {
+  const base = String(baseUrl).endsWith('/') ? String(baseUrl) : `${baseUrl}/`;
+  /** @type {Map<string, string>} lower-case key → actual spelling */
+  const map = new Map();
+  for (const raw of paths || []) {
+    const path = normalizePath(raw);
+    if (path) map.set(path.toLowerCase(), path);
+  }
+
+  /** @param {string} path */
+  function find(path) {
+    return map.get(normalizePath(path).toLowerCase()) ?? null;
+  }
+
+  /** @param {string} path */
+  async function get(path) {
+    const real = find(path);
+    if (real === null) return null;
+    const res = await fetchImpl(fileUrl(base, real));
+    if (!res.ok) throw new Error(`${real}: HTTP ${res.status}`);
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
+  return {
+    size: map.size,
+    /** @param {string} path */
+    has(path) {
+      return find(path) !== null;
+    },
+    /** Actual spelling of a path, or null. @param {string} path */
+    realPath(path) {
+      return find(path);
+    },
+    /** Files are not held in memory here. @param {string} _path */
+    file(_path) {
+      return null;
+    },
+    /** All paths, sorted. */
+    list() {
+      return Array.from(map.values()).sort();
+    },
+    /** The file's HTTP URL, or null. @param {string} path */
+    url(path) {
+      const real = find(path);
+      return real === null ? null : fileUrl(base, real);
+    },
+    /** @param {string} path */
+    async text(path) {
+      const bytes = await get(path);
+      return bytes === null ? null : decodeText(bytes);
+    },
+    /** @param {string} path */
+    async bytes(path) {
+      return get(path);
+    },
+    dispose() {},
+  };
+}

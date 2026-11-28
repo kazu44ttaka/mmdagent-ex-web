@@ -40,6 +40,18 @@ html, body {
   font-size: 18px;
 }
 
+/* shown when a scene started from the URL and the browser still blocks audio */
+#sound-gate {
+  position: fixed;
+  left: 50%;
+  bottom: 32px;
+  transform: translateX(-50%);
+  z-index: 4;
+  padding: 10px 20px;
+  font-size: 15px;
+}
+#sound-gate[hidden] { display: none; }
+
 #panel {
   position: fixed;
   top: 0;

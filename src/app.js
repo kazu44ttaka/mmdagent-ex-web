@@ -13,7 +13,8 @@
  * FSTs see every message, and the WebSocket peer gets every message too.
  */
 
-import { createVfs, dirname, joinPath, basename, normalizePath } from './vfs.js';
+import { createVfs, createHttpVfs, dirname, joinPath, basename, normalizePath } from './vfs.js';
+import { readLaunchParams, loadFileList } from './launch.js';
 import { parseMdf, websocketUrlFromMdf, mdfFloat } from './mdf.js';
 import { Fst, FstSet } from './fst.js';
 import { KeyValue, Bindings } from './bindings.js';
@@ -361,8 +362,17 @@ async function startScene(mdfPath) {
 /** @param {FileList | File[]} files */
 function setFiles(files) {
   const list = Array.from(files);
+  useVfs(createVfs(list.map((file) => ({ path: file.webkitRelativePath || file.name, file }))), `${list.length} 個のファイル`);
+}
+
+/**
+ * Use a file tree (picked folder or content served over HTTP) and list its .mdf files.
+ * @param {ReturnType<typeof createVfs> | ReturnType<typeof createHttpVfs>} next
+ * @param {string} label
+ */
+function useVfs(next, label) {
   vfs?.dispose();
-  vfs = createVfs(list.map((file) => ({ path: file.webkitRelativePath || file.name, file })));
+  vfs = next;
   const mdfs = vfs.list().filter((p) => p.toLowerCase().endsWith('.mdf'));
   elMdf.innerHTML = '';
   for (const p of mdfs) {
@@ -376,7 +386,7 @@ function setFiles(files) {
   elMdf.value = (last && mdfs.includes(last) && last) || ws || mdfs[0] || '';
   elMdf.disabled = mdfs.length === 0;
   elStart.disabled = mdfs.length === 0;
-  log(`${list.length} 個のファイルを読み込みました（.mdf ${mdfs.length} 個）`);
+  log(`${label}を読み込みました（.mdf ${mdfs.length} 個）`);
   if (!mdfs.length) log('.mdf が見つかりません。MMDAgent-EX のコンテンツのフォルダーを選んでください。');
 }
 
@@ -549,9 +559,62 @@ document.addEventListener('drop', async (ev) => {
   if (files.length) setFiles(files);
 });
 
+// Browsers keep audio off until the page is clicked. When a scene starts from
+// the URL (no click yet), show a button over the view until sound is allowed.
+const elSoundGate = /** @type {HTMLButtonElement} */ ($('sound-gate'));
+function updateSoundGate() {
+  elSoundGate.hidden = audio.getContext()?.state === 'running';
+}
+elSoundGate.addEventListener('click', () => {
+  audio.ensureContext().then(updateSoundGate).catch(() => {});
+  elSoundGate.hidden = true;
+});
+function offerSoundGate() {
+  audio.ensureContext().then(updateSoundGate).catch(() => {});
+  audio.getContext()?.addEventListener('statechange', updateSoundGate);
+  // resume() stays pending without a click: decide after a moment
+  window.setTimeout(updateSoundGate, 300);
+}
+
+/**
+ * Open the scene named in the page URL (see launch.js).
+ * @param {ReturnType<typeof readLaunchParams>} launch
+ */
+async function startFromUrl(launch) {
+  if (!launch.content) return;
+  log(`${launch.content} からコンテンツを読み込みます…`);
+  let files;
+  try {
+    files = await loadFileList(launch.content);
+  } catch (err) {
+    log(`コンテンツの一覧を読めません: ${err?.message || err}`);
+    return;
+  }
+  useVfs(createHttpVfs(launch.content, files), `${files.length} 個のファイル（${launch.content}）`);
+  if (launch.ws) elWs.value = launch.ws;
+  if (launch.mdf) {
+    const real = vfs?.realPath(launch.mdf);
+    if (!real) {
+      log(`${launch.mdf} がコンテンツにありません`);
+      return;
+    }
+    elMdf.value = real;
+    await startScene(real);
+    // the scene sets the address from the .mdf; the URL's address wins
+    if (launch.ws) elWs.value = launch.ws;
+  }
+  if (launch.connect) connect();
+  offerSoundGate();
+}
+
 setStatus('切断', 'idle');
 elWs.value = 'ws://localhost:9001/chat';
-log('MMDAgent-EX のコンテンツのフォルダーを選び、.mdf を選んで「開始」を押してください。');
+const launch = readLaunchParams(location.search, location.href);
+if (launch.content) {
+  startFromUrl(launch).catch((err) => log(`シーンを始められません: ${err?.message || err}`));
+} else {
+  log('MMDAgent-EX のコンテンツのフォルダーを選び、.mdf を選んで「開始」を押してください。');
+}
 
 // for debugging from the console
 Object.assign(window, {

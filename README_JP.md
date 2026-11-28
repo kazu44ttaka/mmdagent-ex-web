@@ -46,12 +46,29 @@ Chrome か Edge で <http://localhost:8000> を開き、次の順に操作しま
 ブラウザーが音の再生を止めているときは、3D 表示を一度クリックしてください。MMDAgent-EX と同じく、ドラッグで視点を回し、
 右ドラッグ（または Shift）で動かし、ホイールで距離を変えます。
 
+### URL でシーンを開く
+
+ほかのプログラムから、フォルダーを選ばずに 1 つのリンクでシーンを開けます。
+
+```text
+http://localhost:8000/?content=<フォルダーの URL>&mdf=<フォルダーの中の .mdf>&ws=<WebSocket の URL>&connect=1
+```
+
+- `content`：HTTP で配っているコンテンツのフォルダー（相対 URL はページから解決します）。その中の `files.json` にファイルの一覧を
+  置きます：`{"files": ["gene/Gene.pmd", "maai_sds/maai_sds_web.mdf", ...]}`（パスはフォルダーから）。ファイルは読むときに取得します。
+- `mdf`：始める `.mdf`（フォルダーから）。`ws`：接続先（`.mdf` の設定より優先）。`connect=1`：シーンを始めたらすぐ接続します。
+
+ブラウザーはページをクリックするまで音を出さないので、それまで画面の下に「クリックすると声が出ます」のボタンが出ます。
+
 ### MaAI-SDS とつなぐ
 
 1. MaAI-SDS の `assets/mmdagent/maai_sds` フォルダーを、サンプル集の中（`example/maai_sds`）にコピーします。
 2. MaAI-SDS の「MMDAgent-EX起動設定」で「アバターの表示先」を「ブラウザ（MMDAgent-EX Web）」にします。MaAI-SDS は
    MMDAgent-EX を起動せず、`ws://localhost:9001/chat` で待ち受けます（ポートは同じ画面で変えられます）。
-3. このページで `example` を選び、`example/maai_sds/maai_sds_web.mdf` を「開始」して「接続」を押します。
+3. MaAI-SDS で「MMDAgent-EX起動」を押します。MaAI-SDS がこのページとサンプル集を配り、シーンと接続先を指定してページを開きます
+   （上の「URL でシーンを開く」）。このフォルダーは `C:\mmdagent-ex-web`（Windows 以外は `~/mmdagent-ex-web`）を探します。
+   別の場所は同じ画面で指定できます。手で開くときは、このページで `example` を選び、`example/maai_sds/maai_sds_web.mdf` を
+   「開始」して「接続」を押します。
 4. MaAI-SDS で音声対話を始めると、ジェネが話し（口パクは Julius）、頷き・まばたきをします。
 
 ## 動くもの

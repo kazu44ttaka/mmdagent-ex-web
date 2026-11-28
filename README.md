@@ -47,12 +47,32 @@ Open <http://localhost:8000> in Chrome or Edge, then:
 Click the 3D view once if the browser has blocked audio playback. Mouse drag rotates the view, right drag (or Shift)
 moves it, and the wheel changes the distance, as in MMDAgent-EX.
 
+### Opening a scene from the URL
+
+Another program can open a scene with one link, without the folder dialog:
+
+```text
+http://localhost:8000/?content=<folder URL>&mdf=<.mdf in the folder>&ws=<WebSocket URL>&connect=1
+```
+
+- `content`: the content folder, served over HTTP (relative URLs are resolved from the page). Next to it, `files.json`
+  lists its files: `{"files": ["gene/Gene.pmd", "maai_sds/maai_sds_web.mdf", ...]}` (paths relative to the folder). Files
+  are fetched when they are read.
+- `mdf`: the `.mdf` to start, relative to the folder. `ws`: the address to connect to (overrides the one in the `.mdf`).
+  `connect=1`: connect right after the scene starts.
+
+Browsers keep audio off until the page is clicked, so a 「クリックすると声が出ます」 (click to turn on sound) button appears
+at the bottom until then.
+
 ### With MaAI-SDS
 
 1. Copy the `assets/mmdagent/maai_sds` folder of MaAI-SDS into the example collection (`example/maai_sds`).
 2. In MaAI-SDS, set 「アバターの表示先」 (avatar display) in 「MMDAgent-EX起動設定」 to 「ブラウザ（MMDAgent-EX Web）」. MaAI-SDS
    then does not start MMDAgent-EX and listens on `ws://localhost:9001/chat` (the port can be changed there).
-3. On this page, choose `example`, start `example/maai_sds/maai_sds_web.mdf`, and press 「接続」 (Connect).
+3. Press 「MMDAgent-EX起動」 (start MMDAgent-EX) in MaAI-SDS. It serves this page and the example collection and opens the
+   page with the scene and the connection set (see above). MaAI-SDS looks for this folder at `C:\mmdagent-ex-web`
+   (`~/mmdagent-ex-web` outside Windows); another place can be set in the same window. To do it by hand instead, choose
+   `example` on this page, start `example/maai_sds/maai_sds_web.mdf`, and press 「接続」 (Connect).
 4. Start a voice dialogue in MaAI-SDS: Gene speaks (lip sync by Julius), nods and blinks.
 
 ## What works
